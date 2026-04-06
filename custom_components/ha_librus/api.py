@@ -59,11 +59,32 @@ class LibrusAPI:
         )
 
     async def authenticate(self) -> str:
-        """Perform full OAuth Authorization Code flow.
+        """Perform full OAuth Authorization Code flow with retry.
 
         Returns the oauth_token.
         Raises LibrusAuthError on failure.
         """
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                token = await self._do_authenticate()
+                return token
+            except LibrusAuthError as err:
+                last_err = err
+                _LOGGER.warning(
+                    "Librus auth attempt %d/3 failed: %s", attempt + 1, err
+                )
+                # Close session and create fresh one for retry
+                await self.close()
+                if attempt < 2:
+                    await asyncio.sleep(2 * (attempt + 1))
+
+        raise LibrusAuthError(
+            f"Authentication failed after 3 attempts: {last_err}"
+        )
+
+    async def _do_authenticate(self) -> str:
+        """Single authentication attempt."""
         session = await self._ensure_session()
 
         # Clear old cookies

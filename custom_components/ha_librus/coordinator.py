@@ -248,10 +248,13 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             return data
 
         except LibrusAuthError as err:
-            raise UpdateFailed(f"Librus authentication failed: {err}") from err
+            raise UpdateFailed(f"Librus auth failed: {err}") from err
         except LibrusApiError as err:
             raise UpdateFailed(f"Librus API error: {err}") from err
+        except UpdateFailed:
+            raise
         except Exception as err:
+            _LOGGER.exception("Unexpected error in Librus coordinator")
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
     def _send_new_grade_notifications(
