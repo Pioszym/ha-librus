@@ -77,7 +77,12 @@ class LibrusBaseSensor(CoordinatorEntity[LibrusCoordinator], SensorEntity):
     ) -> None:
         """Initialize."""
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_{key}"
+        # Use student_id in unique_id to avoid collisions between children
+        student_id = ""
+        if coordinator.data and coordinator.data.student_id:
+            student_id = coordinator.data.student_id
+        self._student_id = student_id
+        self._attr_unique_id = f"librus_{student_id}_{key}" if student_id else f"{entry.entry_id}_{key}"
         self._attr_name = name
         self._attr_icon = icon
         self._entry = entry
@@ -88,7 +93,8 @@ class LibrusStudentSensor(LibrusBaseSensor):
 
     def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
-        super().__init__(coordinator, entry, "student", "Librus - Uczen", "mdi:account-school")
+        sid = coordinator.data.student_id if coordinator.data else ""
+        super().__init__(coordinator, entry, "student", f"Librus {sid} - Uczen", "mdi:account-school")
 
     @property
     def native_value(self) -> str | None:
@@ -113,8 +119,9 @@ class LibrusAllGradesSensor(LibrusBaseSensor):
 
     def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
+        sid = coordinator.data.student_id if coordinator.data else ""
         super().__init__(
-            coordinator, entry, "all_grades", "Librus - Oceny wszystkie", "mdi:format-list-bulleted"
+            coordinator, entry, "all_grades", f"Librus {sid} - Oceny wszystkie", "mdi:format-list-bulleted"
         )
 
     @property
@@ -149,8 +156,9 @@ class LibrusLastGradeSensor(LibrusBaseSensor):
 
     def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
+        sid = coordinator.data.student_id if coordinator.data else ""
         super().__init__(
-            coordinator, entry, "last_grade", "Librus - Ostatnia ocena", "mdi:star"
+            coordinator, entry, "last_grade", f"Librus {sid} - Ostatnia ocena", "mdi:star"
         )
 
     @property
@@ -182,8 +190,9 @@ class LibrusLuckyNumberSensor(LibrusBaseSensor):
 
     def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
+        sid = coordinator.data.student_id if coordinator.data else ""
         super().__init__(
-            coordinator, entry, "lucky_number", "Librus - Szczesliwy numerek", "mdi:clover"
+            coordinator, entry, "lucky_number", f"Librus {sid} - Szczesliwy numerek", "mdi:clover"
         )
 
     @property
@@ -214,11 +223,12 @@ class LibrusSubjectSensor(LibrusBaseSensor):
     ) -> None:
         """Initialize."""
         entity_suffix = _sanitize_entity_id(subject_name)
+        sid = coordinator.data.student_id if coordinator.data else ""
         super().__init__(
             coordinator,
             entry,
             f"grades_{entity_suffix}",
-            f"Librus - {subject_name}",
+            f"Librus {sid} - {subject_name}",
             "mdi:school",
         )
         self._subject_name = subject_name

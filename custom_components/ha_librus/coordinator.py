@@ -56,6 +56,7 @@ class LibrusData:
     def __init__(self) -> None:
         """Initialize."""
         self.student_name: str = ""
+        self.student_id: str = ""  # Librus account Login (e.g. "7375597"), used in entity IDs
         self.student_class: str = ""
         self.semester: int = 2
         self.lucky_number: int | None = None
@@ -128,6 +129,7 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             me = me_data.get("Me", {})
             account = me.get("Account", {})
             data.student_name = f"{account.get('FirstName', '')} {account.get('LastName', '')}".strip()
+            data.student_id = str(account.get("Login", account.get("Id", "")))
 
             # Class info & semester
             class_info = classes_data.get("Class", {})
