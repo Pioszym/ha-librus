@@ -61,8 +61,9 @@ class LibrusData:
         self.semester: int = 2
         self.lucky_number: int | None = None
         self.lucky_number_date: str | None = None
-        self.grades_by_subject: dict[str, list[dict[str, Any]]] = {}
-        self.all_grades_text: str = ""
+        # Grades per subject, per semester: {subject_name: [grade_entries]}
+        self.grades_sem1: dict[str, list[dict[str, Any]]] = {}
+        self.grades_sem2: dict[str, list[dict[str, Any]]] = {}
         self.last_grade_date: str = ""
         self.last_grade_value: str = ""
         self.last_grade_subject: str = ""
@@ -70,6 +71,11 @@ class LibrusData:
         self.subject_entity_map: dict[str, str] = {}  # subject_name -> entity_suffix
         self.announcements: list[dict[str, Any]] = []
         self.all_grade_ids: list[int] = []
+        # Behaviour grades
+        self.behaviour_sem1: str = ""  # e.g. "wzorowe"
+        self.behaviour_sem2: str = ""
+        self.behaviour_sem1_proposal: str = ""
+        self.behaviour_sem2_proposal: str = ""
 
 
 class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
@@ -105,6 +111,8 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 self.api.get_classes(),
                 self.api.get_lucky_number(),
                 self.api.get_school_notices(),
+                self.api.get_behaviour_grades(),
+                self.api.get_behaviour_types(),
                 return_exceptions=True,
             )
 
@@ -122,6 +130,8 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             classes_data = results[5] if not isinstance(results[5], Exception) else {}
             lucky_data = results[6] if not isinstance(results[6], Exception) else {}
             notices_data = results[7] if not isinstance(results[7], Exception) else {}
+            behaviour_data = results[8] if not isinstance(results[8], Exception) else {}
+            behaviour_types = results[9] if not isinstance(results[9], Exception) else {}
 
             data = LibrusData()
 
@@ -151,8 +161,9 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             for c in comments_data.get("Comments", []):
                 comment_map[c["Id"]] = c.get("Text", "")
 
-            # Process grades
-            grades_by_subject: dict[str, list[dict[str, Any]]] = {}
+            # Process grades — both semesters
+            grades_sem1: dict[str, list[dict[str, Any]]] = {}
+            grades_sem2: dict[str, list[dict[str, Any]]] = {}
             all_grade_ids: list[int] = []
             last_date = "1970-01-01 00:00:00"
             last_grade = ""
@@ -160,14 +171,13 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             last_category = ""
 
             for g in grades_data.get("Grades", []):
-                if g.get("Semester") != data.semester:
-                    continue
-
+                sem = g.get("Semester", 0)
                 sub_id = g.get("Subject", {}).get("Id")
                 sub_name = subject_map.get(sub_id, "Nieznany")
 
-                if sub_name not in grades_by_subject:
-                    grades_by_subject[sub_name] = []
+                target = grades_sem1 if sem == 1 else grades_sem2
+                if sub_name not in target:
+                    target[sub_name] = []
 
                 grade_str = str(g.get("Grade", ""))
                 if g.get("IsConstituent") is False or g.get("IsSemester"):
@@ -190,8 +200,9 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                     "category": cat_name,
                     "comment": comment_text,
                     "id": g.get("Id"),
+                    "semester": sem,
                 }
-                grades_by_subject[sub_name].append(grade_entry)
+                target[sub_name].append(grade_entry)
                 all_grade_ids.append(g.get("Id"))
 
                 add_date = g.get("AddDate", "")
@@ -201,24 +212,40 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                     last_subject = sub_name
                     last_category = cat_name
 
-            data.grades_by_subject = grades_by_subject
+            data.grades_sem1 = grades_sem1
+            data.grades_sem2 = grades_sem2
             data.all_grade_ids = all_grade_ids
             data.last_grade_date = last_date if last_date != "1970-01-01 00:00:00" else ""
             data.last_grade_value = last_grade
             data.last_grade_subject = last_subject
             data.last_grade_category = last_category
 
-            # Build all-grades text
-            lines = []
-            for sub_name in sorted(grades_by_subject.keys()):
-                grades = grades_by_subject[sub_name]
-                grade_strs = " ".join(g["grade"] for g in grades)
-                lines.append(f"{sub_name}: {grade_strs}")
-            data.all_grades_text = "\n".join(lines)
-
-            # Entity suffix map
-            for sub_name in grades_by_subject:
+            # Entity suffix map — all subjects from both semesters
+            all_subjects = set(grades_sem1.keys()) | set(grades_sem2.keys())
+            for sub_name in all_subjects:
                 data.subject_entity_map[sub_name] = _sanitize_entity_id(sub_name)
+
+            # Behaviour grades
+            btype_map: dict[str, str] = {}
+            for bt in behaviour_types.get("Types", []):
+                btype_map[str(bt["Id"])] = bt.get("Name", "")
+
+            for bg in behaviour_data.get("Grades", []):
+                sem = str(bg.get("Semester", ""))
+                type_id = str(bg.get("GradeType", {}).get("Id", ""))
+                grade_name = btype_map.get(type_id, "")
+                is_proposal = str(bg.get("IsProposal", "0")) == "1"
+
+                if sem == "1":
+                    if is_proposal:
+                        data.behaviour_sem1_proposal = grade_name
+                    else:
+                        data.behaviour_sem1 = grade_name
+                elif sem == "2":
+                    if is_proposal:
+                        data.behaviour_sem2_proposal = grade_name
+                    else:
+                        data.behaviour_sem2 = grade_name
 
             # Lucky number
             lucky = lucky_data.get("LuckyNumber", {})
@@ -262,8 +289,14 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
     ) -> None:
         """Send HA persistent notifications for new grades."""
         notifications: list[str] = []
-        for sub_name in sorted(data.grades_by_subject.keys()):
-            for g in data.grades_by_subject[sub_name]:
+        # Check both semesters
+        all_grades = {}
+        for sub, grades in data.grades_sem1.items():
+            all_grades.setdefault(sub, []).extend(grades)
+        for sub, grades in data.grades_sem2.items():
+            all_grades.setdefault(sub, []).extend(grades)
+        for sub_name in sorted(all_grades.keys()):
+            for g in all_grades[sub_name]:
                 if g["id"] in new_ids:
                     line = f"{sub_name}: **{g['grade']}**"
                     if g["category"]:

@@ -35,7 +35,10 @@ async def async_setup_entry(
             return
 
         new_entities: list[SensorEntity] = []
-        for subject_name in coordinator.data.grades_by_subject:
+        all_subjects = set(coordinator.data.grades_sem1.keys()) | set(
+            coordinator.data.grades_sem2.keys()
+        )
+        for subject_name in all_subjects:
             if subject_name not in known_subjects:
                 known_subjects.add(subject_name)
                 new_entities.append(
@@ -52,6 +55,7 @@ async def async_setup_entry(
         LibrusAllGradesSensor(coordinator, entry),
         LibrusLastGradeSensor(coordinator, entry),
         LibrusLuckyNumberSensor(coordinator, entry),
+        LibrusBehaviourSensor(coordinator, entry),
     ]
     async_add_entities(entities)
 
@@ -82,7 +86,9 @@ class LibrusBaseSensor(CoordinatorEntity[LibrusCoordinator], SensorEntity):
         if coordinator.data and coordinator.data.student_id:
             student_id = coordinator.data.student_id
         self._student_id = student_id
-        self._attr_unique_id = f"librus_{student_id}_{key}" if student_id else f"{entry.entry_id}_{key}"
+        self._attr_unique_id = (
+            f"librus_{student_id}_{key}" if student_id else f"{entry.entry_id}_{key}"
+        )
         self._attr_name = name
         self._attr_icon = icon
         self._entry = entry
@@ -94,7 +100,9 @@ class LibrusStudentSensor(LibrusBaseSensor):
     def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
         sid = coordinator.data.student_id if coordinator.data else ""
-        super().__init__(coordinator, entry, "student", f"Librus {sid} - Uczen", "mdi:account-school")
+        super().__init__(
+            coordinator, entry, "student", f"Librus {sid} - Uczen", "mdi:account-school"
+        )
 
     @property
     def native_value(self) -> str | None:
@@ -115,39 +123,47 @@ class LibrusStudentSensor(LibrusBaseSensor):
 
 
 class LibrusAllGradesSensor(LibrusBaseSensor):
-    """Sensor showing all grades summary."""
+    """Sensor showing all grades summary — both semesters."""
 
     def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
         sid = coordinator.data.student_id if coordinator.data else ""
         super().__init__(
-            coordinator, entry, "all_grades", f"Librus {sid} - Oceny wszystkie", "mdi:format-list-bulleted"
+            coordinator,
+            entry,
+            "all_grades",
+            f"Librus {sid} - Oceny wszystkie",
+            "mdi:format-list-bulleted",
         )
 
     @property
     def native_value(self) -> str | None:
-        """Return all grades text."""
+        """Return current semester subject count."""
         if self.coordinator.data is None:
             return None
-        text = self.coordinator.data.all_grades_text
-        # HA state max 255 chars - truncate if needed
-        if len(text) > 255:
-            return text[:252] + "..."
-        return text
+        d = self.coordinator.data
+        sem = d.grades_sem2 if d.semester == 2 else d.grades_sem1
+        count = len(sem)
+        return f"Semestr {d.semester}: {count} przedmiotow"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return full grades as attribute (no limit)."""
+        """Return grades per subject per semester as attributes."""
         if self.coordinator.data is None:
             return {}
-        attrs: dict[str, Any] = {
-            "pelne_oceny": self.coordinator.data.all_grades_text,
-            "semestr": self.coordinator.data.semester,
-        }
-        # Add per-subject grade strings as attributes
-        for sub_name, grades in self.coordinator.data.grades_by_subject.items():
-            grade_str = " ".join(g["grade"] for g in grades)
-            attrs[sub_name] = grade_str
+        d = self.coordinator.data
+        attrs: dict[str, Any] = {"semestr": d.semester}
+
+        # All subjects from both semesters
+        all_subjects = sorted(set(d.grades_sem1.keys()) | set(d.grades_sem2.keys()))
+
+        for sub_name in all_subjects:
+            sem1_grades = d.grades_sem1.get(sub_name, [])
+            sem2_grades = d.grades_sem2.get(sub_name, [])
+            s1 = " ".join(g["grade"] for g in sem1_grades) if sem1_grades else "-"
+            s2 = " ".join(g["grade"] for g in sem2_grades) if sem2_grades else "-"
+            attrs[sub_name] = f"I: {s1} | II: {s2}"
+
         return attrs
 
 
@@ -158,7 +174,11 @@ class LibrusLastGradeSensor(LibrusBaseSensor):
         """Initialize."""
         sid = coordinator.data.student_id if coordinator.data else ""
         super().__init__(
-            coordinator, entry, "last_grade", f"Librus {sid} - Ostatnia ocena", "mdi:star"
+            coordinator,
+            entry,
+            "last_grade",
+            f"Librus {sid} - Ostatnia ocena",
+            "mdi:star",
         )
 
     @property
@@ -192,7 +212,11 @@ class LibrusLuckyNumberSensor(LibrusBaseSensor):
         """Initialize."""
         sid = coordinator.data.student_id if coordinator.data else ""
         super().__init__(
-            coordinator, entry, "lucky_number", f"Librus {sid} - Szczesliwy numerek", "mdi:clover"
+            coordinator,
+            entry,
+            "lucky_number",
+            f"Librus {sid} - Szczesliwy numerek",
+            "mdi:clover",
         )
 
     @property
@@ -212,8 +236,52 @@ class LibrusLuckyNumberSensor(LibrusBaseSensor):
         }
 
 
+class LibrusBehaviourSensor(LibrusBaseSensor):
+    """Sensor showing behaviour/conduct grade."""
+
+    def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
+        """Initialize."""
+        sid = coordinator.data.student_id if coordinator.data else ""
+        super().__init__(
+            coordinator,
+            entry,
+            "behaviour",
+            f"Librus {sid} - Zachowanie",
+            "mdi:account-check",
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        """Return current semester behaviour grade."""
+        if self.coordinator.data is None:
+            return None
+        d = self.coordinator.data
+        current = d.behaviour_sem2 if d.semester == 2 else d.behaviour_sem1
+        if not current:
+            # Fall back to proposal
+            current = (
+                d.behaviour_sem2_proposal
+                if d.semester == 2
+                else d.behaviour_sem1_proposal
+            )
+        return current or None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return behaviour details for both semesters."""
+        if self.coordinator.data is None:
+            return {}
+        d = self.coordinator.data
+        return {
+            "semestr_1": d.behaviour_sem1 or d.behaviour_sem1_proposal or "-",
+            "semestr_1_propozycja": d.behaviour_sem1_proposal or "-",
+            "semestr_2": d.behaviour_sem2 or d.behaviour_sem2_proposal or "-",
+            "semestr_2_propozycja": d.behaviour_sem2_proposal or "-",
+        }
+
+
 class LibrusSubjectSensor(LibrusBaseSensor):
-    """Dynamic per-subject grade sensor."""
+    """Dynamic per-subject grade sensor — shows both semesters."""
 
     def __init__(
         self,
@@ -235,28 +303,42 @@ class LibrusSubjectSensor(LibrusBaseSensor):
 
     @property
     def native_value(self) -> str | None:
-        """Return grades for this subject."""
+        """Return current semester grades for this subject."""
         if self.coordinator.data is None:
             return None
-        grades = self.coordinator.data.grades_by_subject.get(self._subject_name, [])
+        d = self.coordinator.data
+        current = d.grades_sem2 if d.semester == 2 else d.grades_sem1
+        grades = current.get(self._subject_name, [])
         if not grades:
-            return None
+            return "Brak ocen"
         return " ".join(g["grade"] for g in grades)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional grade details."""
+        """Return grade details for both semesters."""
         if self.coordinator.data is None:
             return {}
-        grades = self.coordinator.data.grades_by_subject.get(self._subject_name, [])
-        if not grades:
-            return {}
-        last = grades[-1]
-        return {
+        d = self.coordinator.data
+        sem1 = d.grades_sem1.get(self._subject_name, [])
+        sem2 = d.grades_sem2.get(self._subject_name, [])
+
+        s1_str = " ".join(g["grade"] for g in sem1) if sem1 else "Brak ocen"
+        s2_str = " ".join(g["grade"] for g in sem2) if sem2 else "Brak ocen"
+
+        # Last grade from any semester
+        all_grades = sem1 + sem2
+        last = all_grades[-1] if all_grades else None
+
+        attrs: dict[str, Any] = {
             "przedmiot": self._subject_name,
-            "ostatnia_ocena": last["grade"],
-            "data_ostatniej": last["date"],
-            "kategoria": last["category"],
-            "liczba_ocen": len(grades),
-            "icon": "mdi:school",
+            "semestr_1": s1_str,
+            "semestr_2": s2_str,
+            "liczba_ocen_sem1": len(sem1),
+            "liczba_ocen_sem2": len(sem2),
         }
+        if last:
+            attrs["ostatnia_ocena"] = last["grade"]
+            attrs["data_ostatniej"] = last["date"]
+            attrs["kategoria"] = last["category"]
+
+        return attrs

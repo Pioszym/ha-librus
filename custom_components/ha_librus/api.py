@@ -242,6 +242,14 @@ class LibrusAPI:
         """Get school announcements."""
         return await self.api_get("SchoolNotices")
 
+    async def get_behaviour_grades(self) -> dict[str, Any]:
+        """Get behaviour/conduct grades."""
+        return await self.api_get("BehaviourGrades")
+
+    async def get_behaviour_types(self) -> dict[str, Any]:
+        """Get behaviour grade type names."""
+        return await self.api_get("BehaviourGrades/Types")
+
     async def get_attendances(self) -> dict[str, Any]:
         """Get attendances."""
         return await self.api_get("Attendances")
