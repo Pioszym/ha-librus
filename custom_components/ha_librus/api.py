@@ -250,6 +250,10 @@ class LibrusAPI:
         """Get behaviour grade type names."""
         return await self.api_get("BehaviourGrades/Types")
 
+    async def get_parent_teacher_conferences(self) -> dict[str, Any]:
+        """Get parent-teacher conferences (zebrania/wywiadówki)."""
+        return await self.api_get("ParentTeacherConferences")
+
     async def get_attendances(self) -> dict[str, Any]:
         """Get attendances."""
         return await self.api_get("Attendances")

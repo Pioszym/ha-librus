@@ -56,6 +56,7 @@ async def async_setup_entry(
         LibrusLastGradeSensor(coordinator, entry),
         LibrusLuckyNumberSensor(coordinator, entry),
         LibrusBehaviourSensor(coordinator, entry),
+        LibrusConferenceSensor(coordinator, entry),
     ]
     async_add_entities(entities)
 
@@ -340,5 +341,56 @@ class LibrusSubjectSensor(LibrusBaseSensor):
             attrs["ostatnia_ocena"] = last["grade"]
             attrs["data_ostatniej"] = last["date"]
             attrs["kategoria"] = last["category"]
+
+        return attrs
+
+
+class LibrusConferenceSensor(LibrusBaseSensor):
+    """Sensor showing next parent-teacher conference (zebranie/wywiadówka)."""
+
+    def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
+        """Initialize."""
+        sid = coordinator.data.student_id if coordinator.data else ""
+        super().__init__(
+            coordinator,
+            entry,
+            "conference",
+            f"Librus {sid} - Zebranie",
+            "mdi:account-group",
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        """Return next conference date or 'Brak'."""
+        if self.coordinator.data is None:
+            return None
+        conf = self.coordinator.data.next_conference
+        if not conf:
+            return "Brak"
+        date = conf.get("date", "")
+        time = conf.get("time", "")
+        return f"{date} {time}".strip() if date else "Brak"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return conference details."""
+        if self.coordinator.data is None:
+            return {}
+        d = self.coordinator.data
+        attrs: dict[str, Any] = {}
+
+        # Next conference details
+        if d.next_conference:
+            attrs["temat"] = d.next_conference.get("topic", "")
+            attrs["data"] = d.next_conference.get("date", "")
+            attrs["godzina"] = d.next_conference.get("time", "")
+            attrs["miejsce"] = d.next_conference.get("place", "")
+
+        # All conferences
+        attrs["liczba_zebran"] = len(d.conferences)
+        for i, conf in enumerate(d.conferences, 1):
+            date = conf.get("date", "")
+            topic = conf.get("topic", "")
+            attrs[f"zebranie_{i}"] = f"{date} - {topic}" if topic else date
 
         return attrs

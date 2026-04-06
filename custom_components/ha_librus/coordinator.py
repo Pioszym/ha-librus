@@ -76,6 +76,9 @@ class LibrusData:
         self.behaviour_sem2: str = ""
         self.behaviour_sem1_proposal: str = ""
         self.behaviour_sem2_proposal: str = ""
+        # Parent-teacher conferences (zebrania)
+        self.conferences: list[dict[str, Any]] = []
+        self.next_conference: dict[str, Any] | None = None
 
 
 class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
@@ -113,6 +116,7 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 self.api.get_school_notices(),
                 self.api.get_behaviour_grades(),
                 self.api.get_behaviour_types(),
+                self.api.get_parent_teacher_conferences(),
                 return_exceptions=True,
             )
 
@@ -132,6 +136,7 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             notices_data = results[7] if not isinstance(results[7], Exception) else {}
             behaviour_data = results[8] if not isinstance(results[8], Exception) else {}
             behaviour_types = results[9] if not isinstance(results[9], Exception) else {}
+            conferences_data = results[10] if not isinstance(results[10], Exception) else {}
 
             data = LibrusData()
 
@@ -261,6 +266,25 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                     "author": notice.get("AddedBy", {}).get("Id", ""),
                 })
 
+            # Parent-teacher conferences (zebrania)
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            conferences = []
+            for conf in conferences_data.get("ParentTeacherConferences", []):
+                conf_entry = {
+                    "id": conf.get("Id"),
+                    "topic": conf.get("Topic", conf.get("Name", "")),
+                    "date": conf.get("Date", ""),
+                    "time": conf.get("Time", conf.get("BeginTime", "")),
+                    "place": conf.get("Place", conf.get("Room", "")),
+                }
+                conferences.append(conf_entry)
+
+            # Sort by date, find next upcoming
+            conferences.sort(key=lambda c: c["date"])
+            data.conferences = conferences
+            upcoming = [c for c in conferences if c["date"] >= today_str]
+            data.next_conference = upcoming[0] if upcoming else None
+
             # New grade detection & notification
             current_ids = set(all_grade_ids)
             if self._first_run:
@@ -288,9 +312,10 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
         self, data: LibrusData, new_ids: set[int]
     ) -> None:
         """Send HA persistent notifications for new grades."""
+        new_grade_details: list[dict[str, Any]] = []
         notifications: list[str] = []
         # Check both semesters
-        all_grades = {}
+        all_grades: dict[str, list[dict[str, Any]]] = {}
         for sub, grades in data.grades_sem1.items():
             all_grades.setdefault(sub, []).extend(grades)
         for sub, grades in data.grades_sem2.items():
@@ -302,32 +327,54 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                     if g["category"]:
                         line += f" ({g['category']})"
                     notifications.append(line)
+                    new_grade_details.append({
+                        "subject": sub_name,
+                        "grade": g["grade"],
+                        "category": g["category"],
+                        "date": g["date"],
+                        "comment": g.get("comment", ""),
+                        "semester": g["semester"],
+                    })
 
-        if notifications:
-            count = len(notifications)
-            title = (
-                "Librus - nowa ocena"
-                if count == 1
-                else f"Librus - nowe oceny ({count})"
-            )
-            message = "\n".join(notifications)
-            _LOGGER.info("New grades detected: %s", message)
+        if not notifications:
+            return
 
-            # Send persistent notification
-            async_create(
-                self.hass,
-                message,
-                title=title,
-                notification_id=f"librus_new_grades_{int(datetime.now().timestamp())}",
-            )
+        count = len(notifications)
+        title = (
+            "Librus - nowa ocena"
+            if count == 1
+            else f"Librus - nowe oceny ({count})"
+        )
+        message = "\n".join(notifications)
+        _LOGGER.info("New grades detected: %s", message)
 
-            # Fire event for automations
+        # Send persistent notification
+        async_create(
+            self.hass,
+            message,
+            title=title,
+            notification_id=f"librus_new_grades_{int(datetime.now().timestamp())}",
+        )
+
+        # Fire individual event per grade (for per-grade mobile notifications)
+        for detail in new_grade_details:
             self.hass.bus.async_fire(
                 "librus_new_grade",
                 {
-                    "count": count,
-                    "grades": notifications,
-                    "title": title,
-                    "message": message,
+                    "student_id": data.student_id,
+                    "student_name": data.student_name,
+                    **detail,
                 },
             )
+
+        # Fire summary event (for batch automations)
+        self.hass.bus.async_fire(
+            "librus_new_grades_summary",
+            {
+                "student_id": data.student_id,
+                "count": count,
+                "grades": notifications,
+                "title": title,
+                "message": message,
+            },
+        )
