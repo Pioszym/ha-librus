@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Librus Synergia",
+        "description": "Enter your Librus Synergia parent login credentials.",
+        "data": {
+          "username": "Login (number)",
+          "password": "Password",
+          "scan_interval": "Scan interval (minutes)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Librus",
+        "description": "Your Librus password has expired or changed. Enter new password.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid login or password",
+      "cannot_connect": "Cannot connect to Librus Synergia"
+    },
+    "abort": {
+      "already_configured": "This Librus account is already configured",
+      "reauth_successful": "Reauthentication successful"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Librus Settings",
+        "data": {
+          "scan_interval": "Scan interval (minutes)"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Librus Synergia",
+        "description": "Podaj dane logowania do Librus Synergia (login rodzica).",
+        "data": {
+          "username": "Login (numer)",
+          "password": "Haslo",
+          "scan_interval": "Interwal odswiezania (minuty)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Ponowna autoryzacja Librus",
+        "description": "Haslo do konta Librus wygaslo lub zostalo zmienione. Podaj nowe haslo.",
+        "data": {
+          "password": "Haslo"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Nieprawidlowy login lub haslo",
+      "cannot_connect": "Nie mozna polaczyc z Librus Synergia"
+    },
+    "abort": {
+      "already_configured": "To konto Librus jest juz skonfigurowane",
+      "reauth_successful": "Ponowna autoryzacja zakonczona pomyslnie"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Ustawienia Librus",
+        "data": {
+          "scan_interval": "Interwal odswiezania (minuty)"
+        }
+      }
+    }
+  }
+}
