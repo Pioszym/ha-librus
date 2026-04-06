@@ -57,6 +57,9 @@ async def async_setup_entry(
         LibrusLuckyNumberSensor(coordinator, entry),
         LibrusBehaviourSensor(coordinator, entry),
         LibrusConferenceSensor(coordinator, entry),
+        LibrusHomeworksSensor(coordinator, entry),
+        LibrusFreeDaysSensor(coordinator, entry),
+        LibrusSubstitutionsSensor(coordinator, entry),
     ]
     async_add_entities(entities)
 
@@ -393,4 +396,140 @@ class LibrusConferenceSensor(LibrusBaseSensor):
             topic = conf.get("topic", "")
             attrs[f"zebranie_{i}"] = f"{date} - {topic}" if topic else date
 
+        return attrs
+
+
+class LibrusHomeworksSensor(LibrusBaseSensor):
+    """Sensor showing upcoming homework assignments (sprawdziany, kartkówki)."""
+
+    def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
+        """Initialize."""
+        sid = coordinator.data.student_id if coordinator.data else ""
+        super().__init__(
+            coordinator,
+            entry,
+            "homeworks",
+            f"Librus {sid} - Sprawdziany",
+            "mdi:clipboard-text",
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        """Return count of upcoming homeworks."""
+        if self.coordinator.data is None:
+            return None
+        count = len(self.coordinator.data.homeworks)
+        if count == 0:
+            return "Brak"
+        return f"{count} nadchodzacych"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return homework details as attributes."""
+        if self.coordinator.data is None:
+            return {}
+        d = self.coordinator.data
+        attrs: dict[str, Any] = {
+            "liczba": len(d.homeworks),
+            # JSON list for n8n to parse
+            "items": d.homeworks,
+        }
+        # Also human-readable list
+        for i, hw in enumerate(d.homeworks[:20], 1):
+            time_str = hw.get("hour_from", "")
+            if time_str:
+                time_str = f" {time_str}"
+            attrs[f"sprawdzian_{i}"] = (
+                f"{hw['date']}{time_str} - {hw['subject']}: {hw['content'][:100]}"
+            )
+        return attrs
+
+
+class LibrusFreeDaysSensor(LibrusBaseSensor):
+    """Sensor showing school free days."""
+
+    def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
+        """Initialize."""
+        sid = coordinator.data.student_id if coordinator.data else ""
+        super().__init__(
+            coordinator,
+            entry,
+            "free_days",
+            f"Librus {sid} - Dni wolne",
+            "mdi:calendar-remove",
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        """Return count of free days."""
+        if self.coordinator.data is None:
+            return None
+        count = len(self.coordinator.data.free_days)
+        return f"{count} dni wolnych"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return free days details."""
+        if self.coordinator.data is None:
+            return {}
+        d = self.coordinator.data
+        attrs: dict[str, Any] = {
+            "liczba": len(d.free_days),
+            "items": d.free_days,
+        }
+        for i, fd in enumerate(d.free_days, 1):
+            date_range = fd["date_from"]
+            if fd["date_to"] != fd["date_from"]:
+                date_range += f" - {fd['date_to']}"
+            attrs[f"wolne_{i}"] = f"{date_range}: {fd['name']}"
+        return attrs
+
+
+class LibrusSubstitutionsSensor(LibrusBaseSensor):
+    """Sensor showing lesson substitutions and cancellations."""
+
+    def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
+        """Initialize."""
+        sid = coordinator.data.student_id if coordinator.data else ""
+        super().__init__(
+            coordinator,
+            entry,
+            "substitutions",
+            f"Librus {sid} - Zastepstwa",
+            "mdi:swap-horizontal",
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        """Return count of upcoming substitutions."""
+        if self.coordinator.data is None:
+            return None
+        count = len(self.coordinator.data.substitutions)
+        if count == 0:
+            return "Brak"
+        return f"{count} zmian"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return substitution details."""
+        if self.coordinator.data is None:
+            return {}
+        d = self.coordinator.data
+        attrs: dict[str, Any] = {
+            "liczba": len(d.substitutions),
+            "items": d.substitutions,
+        }
+        for i, sub in enumerate(d.substitutions[:20], 1):
+            time_str = sub.get("hour_from", "")
+            if time_str:
+                time_str = f" {time_str}"
+            if sub["is_cancelled"]:
+                label = f"ODWOLANA {sub['org_subject']}"
+            elif sub["new_subject"] and sub["new_subject"] != sub["org_subject"]:
+                label = f"{sub['org_subject']} -> {sub['new_subject']}"
+            else:
+                label = f"Zastepstwo {sub['org_subject']}"
+            if sub.get("note"):
+                label += f" ({sub['note']})"
+            attrs[f"zmiana_{i}"] = f"{sub['date']}{time_str} - {label}"
         return attrs

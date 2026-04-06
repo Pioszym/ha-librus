@@ -79,6 +79,14 @@ class LibrusData:
         # Parent-teacher conferences (zebrania)
         self.conferences: list[dict[str, Any]] = []
         self.next_conference: dict[str, Any] | None = None
+        # HomeWorks (sprawdziany, kartkówki)
+        self.homeworks: list[dict[str, Any]] = []
+        # School free days
+        self.free_days: list[dict[str, Any]] = []
+        # Substitutions (zastępstwa, odwołane lekcje)
+        self.substitutions: list[dict[str, Any]] = []
+        # Timetable (plan lekcji) - used to resolve lesson hours
+        self.timetable: dict[str, list[dict[str, Any]]] = {}  # date -> [lessons]
 
 
 class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
@@ -117,6 +125,10 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 self.api.get_behaviour_grades(),
                 self.api.get_behaviour_types(),
                 self.api.get_parent_teacher_conferences(),
+                self.api.get_homeworks(),
+                self.api.get_school_free_days(),
+                self.api.get_substitutions(),
+                self.api.get_timetables(),
                 return_exceptions=True,
             )
 
@@ -137,6 +149,10 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             behaviour_data = results[8] if not isinstance(results[8], Exception) else {}
             behaviour_types = results[9] if not isinstance(results[9], Exception) else {}
             conferences_data = results[10] if not isinstance(results[10], Exception) else {}
+            homeworks_data = results[11] if not isinstance(results[11], Exception) else {}
+            free_days_data = results[12] if not isinstance(results[12], Exception) else {}
+            substitutions_data = results[13] if not isinstance(results[13], Exception) else {}
+            timetable_data = results[14] if not isinstance(results[14], Exception) else {}
 
             data = LibrusData()
 
@@ -284,6 +300,120 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             data.conferences = conferences
             upcoming = [c for c in conferences if c["date"] >= today_str]
             data.next_conference = upcoming[0] if upcoming else None
+
+            # Timetable — build lesson hours lookup
+            # timetable_data has: {Timetable: {date: [slot0, slot1, ...]}}
+            # Each slot is a list of lessons (usually 1 or empty)
+            timetable = timetable_data.get("Timetable", {})
+            lesson_hours: dict[str, dict[str, dict[str, str]]] = {}
+            # lesson_hours[date][lesson_no] = {subject, hour_from, hour_to, teacher, classroom}
+            for date_str, slots in timetable.items():
+                if not isinstance(slots, list):
+                    continue
+                day_lessons: dict[str, dict[str, str]] = {}
+                for slot in slots:
+                    if isinstance(slot, list):
+                        for lesson in slot:
+                            if isinstance(lesson, dict):
+                                lno = str(lesson.get("LessonNo", ""))
+                                sub = lesson.get("Subject", {})
+                                sub_name = sub.get("Name", "") if isinstance(sub, dict) else ""
+                                teacher = lesson.get("Teacher", {})
+                                t_name = ""
+                                if isinstance(teacher, dict):
+                                    t_name = f"{teacher.get('FirstName', '')} {teacher.get('LastName', '')}".strip()
+                                day_lessons[lno] = {
+                                    "subject": sub_name,
+                                    "hour_from": lesson.get("HourFrom", ""),
+                                    "hour_to": lesson.get("HourTo", ""),
+                                    "teacher": t_name,
+                                    "classroom": lesson.get("Classroom", {}).get("Id", "") if isinstance(lesson.get("Classroom"), dict) else "",
+                                    "is_canceled": lesson.get("IsCanceled", False),
+                                }
+                if day_lessons:
+                    lesson_hours[date_str] = day_lessons
+            data.timetable = lesson_hours
+
+            # HomeWorks (sprawdziany, kartkówki)
+            homeworks = []
+            for hw in homeworks_data.get("HomeWorks", []):
+                hw_date = hw.get("Date", "")
+                lesson_no = str(hw.get("LessonNo", ""))
+                hw_sub_id = hw.get("Subject", {}).get("Id") if isinstance(hw.get("Subject"), dict) else None
+                hw_sub_name = subject_map.get(hw_sub_id, "Nieznany") if hw_sub_id else ""
+
+                # Resolve lesson time from timetable
+                hour_from = hw.get("TimeFrom", "")
+                hour_to = hw.get("TimeTo", "")
+                # Try to cross-reference with timetable for the correct hour
+                if hw_date in lesson_hours and lesson_no in lesson_hours[hw_date]:
+                    tt_lesson = lesson_hours[hw_date][lesson_no]
+                    if tt_lesson["hour_from"]:
+                        hour_from = tt_lesson["hour_from"]
+                        hour_to = tt_lesson["hour_to"]
+
+                homeworks.append({
+                    "id": hw.get("Id"),
+                    "date": hw_date,
+                    "subject": hw_sub_name,
+                    "content": hw.get("Content", ""),
+                    "lesson_no": lesson_no,
+                    "hour_from": hour_from,
+                    "hour_to": hour_to,
+                    "add_date": hw.get("AddDate", ""),
+                })
+
+            homeworks.sort(key=lambda h: h["date"])
+            data.homeworks = [h for h in homeworks if h["date"] >= today_str]
+
+            # School free days
+            free_days = []
+            for fd in free_days_data.get("SchoolFreeDays", []):
+                free_days.append({
+                    "id": fd.get("Id"),
+                    "name": fd.get("Name", ""),
+                    "date_from": fd.get("DateFrom", ""),
+                    "date_to": fd.get("DateTo", ""),
+                })
+            free_days.sort(key=lambda f: f["date_from"])
+            data.free_days = free_days
+
+            # Substitutions (zastępstwa i odwołane lekcje)
+            substitutions = []
+            for sub in substitutions_data.get("Substitutions", []):
+                sub_date = sub.get("Date", sub.get("OrgDate", ""))
+                if sub_date < today_str:
+                    continue  # Only future/today
+                lesson_no = str(sub.get("LessonNo", sub.get("OrgLessonNo", "")))
+                is_cancelled = sub.get("IsCancelled", False)
+
+                org_sub_id = sub.get("OrgSubject", {}).get("Id") if isinstance(sub.get("OrgSubject"), dict) else None
+                org_sub_name = subject_map.get(org_sub_id, "") if org_sub_id else ""
+
+                new_sub_id = sub.get("Subject", {}).get("Id") if isinstance(sub.get("Subject"), dict) else None
+                new_sub_name = subject_map.get(new_sub_id, "") if new_sub_id else ""
+
+                # Resolve time from timetable
+                hour_from = ""
+                hour_to = ""
+                if sub_date in lesson_hours and lesson_no in lesson_hours[sub_date]:
+                    tt = lesson_hours[sub_date][lesson_no]
+                    hour_from = tt["hour_from"]
+                    hour_to = tt["hour_to"]
+
+                substitutions.append({
+                    "id": sub.get("Id"),
+                    "date": sub_date,
+                    "lesson_no": lesson_no,
+                    "is_cancelled": is_cancelled,
+                    "org_subject": org_sub_name,
+                    "new_subject": new_sub_name,
+                    "hour_from": hour_from,
+                    "hour_to": hour_to,
+                    "note": sub.get("SubstitutionNote", ""),
+                })
+            substitutions.sort(key=lambda s: (s["date"], s["lesson_no"]))
+            data.substitutions = substitutions
 
             # New grade detection & notification
             current_ids = set(all_grade_ids)

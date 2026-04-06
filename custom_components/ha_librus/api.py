@@ -254,6 +254,18 @@ class LibrusAPI:
         """Get parent-teacher conferences (zebrania/wywiadówki)."""
         return await self.api_get("ParentTeacherConferences")
 
+    async def get_homeworks(self) -> dict[str, Any]:
+        """Get homework assignments (sprawdziany, kartkówki)."""
+        return await self.api_get("HomeWorks")
+
+    async def get_school_free_days(self) -> dict[str, Any]:
+        """Get school free days."""
+        return await self.api_get("SchoolFreeDays")
+
+    async def get_substitutions(self) -> dict[str, Any]:
+        """Get lesson substitutions and cancellations."""
+        return await self.api_get("Calendars/Substitutions")
+
     async def get_attendances(self) -> dict[str, Any]:
         """Get attendances."""
         return await self.api_get("Attendances")
