@@ -37,19 +37,21 @@ Enter your Librus Synergia parent login credentials:
 
 ## Sensors
 
+Entity IDs contain the Librus student login ID (e.g. `7375597`) to avoid collisions when multiple children are configured.
+
 ### Static sensors (always present)
 | Sensor | Description |
 |--------|-------------|
-| `sensor.librus_uczen` | Student name, class, semester |
-| `sensor.librus_oceny_wszystkie` | All grades summary |
-| `sensor.librus_ostatnia_ocena` | Most recent grade with details |
-| `sensor.librus_szczesliwy_numerek` | Today's lucky number |
+| `sensor.librus_7375597_uczen` | Student name, class, semester |
+| `sensor.librus_7375597_oceny_wszystkie` | All grades summary |
+| `sensor.librus_7375597_ostatnia_ocena` | Most recent grade with details |
+| `sensor.librus_7375597_szczesliwy_numerek` | Today's lucky number |
 
 ### Dynamic sensors (per subject)
 For each subject with grades, a sensor is automatically created:
-- `sensor.librus_biologia`
-- `sensor.librus_matematyka`
-- `sensor.librus_jezyk_polski`
+- `sensor.librus_7375597_biologia`
+- `sensor.librus_7375597_matematyka`
+- `sensor.librus_7375597_jezyk_polski`
 - etc.
 
 Each subject sensor includes attributes: `ostatnia_ocena`, `data_ostatniej`, `kategoria`, `liczba_ocen`.
