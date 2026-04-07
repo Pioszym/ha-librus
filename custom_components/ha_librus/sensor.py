@@ -539,7 +539,10 @@ class LibrusSubstitutionsSensor(LibrusBaseSensor):
 
 
 class LibrusTimetableSensor(LibrusBaseSensor):
-    """Sensor showing timetable (plan lekcji) for today and tomorrow."""
+    """Sensor showing base timetable (plan lekcji) from TimetableEntries."""
+
+    # Day names for attributes
+    _DAY_NAMES = ["poniedzialek", "wtorek", "sroda", "czwartek", "piatek"]
 
     def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
         """Initialize."""
@@ -552,64 +555,105 @@ class LibrusTimetableSensor(LibrusBaseSensor):
             "mdi:calendar-clock",
         )
 
-    def _get_day_lessons(self, date_str: str) -> list[dict[str, Any]]:
-        """Get sorted lessons for a given date."""
+    def _get_weekday_lessons(self, weekday: int) -> list[dict[str, Any]]:
+        """Get sorted lessons for a weekday (0=Mon) from base timetable."""
         if self.coordinator.data is None:
             return []
-        day = self.coordinator.data.timetable.get(date_str, {})
+        day = self.coordinator.data.base_timetable.get(weekday, {})
         lessons = []
         for lno in sorted(day.keys(), key=lambda x: int(x) if x.isdigit() else 99):
             tt = day[lno]
-            if not tt["subject"]:
+            if not tt.get("subject"):
                 continue
             lessons.append({
                 "nr": lno,
                 "subject": tt["subject"],
-                "hour_from": tt["hour_from"],
-                "hour_to": tt["hour_to"],
-                "teacher": tt["teacher"],
-                "is_canceled": tt.get("is_canceled", False),
+                "hour_from": tt.get("hour_from", ""),
+                "hour_to": tt.get("hour_to", ""),
+                "teacher": tt.get("teacher", ""),
+                "classroom": tt.get("classroom", ""),
             })
         return lessons
+
+    def _get_day_lessons_with_overrides(self, date_str: str, weekday: int) -> list[dict[str, Any]]:
+        """Get lessons for a date: use Timetables (current week) if available, else base."""
+        if self.coordinator.data is None:
+            return []
+        # Current week data has real-time info (cancellations, substitutions)
+        day = self.coordinator.data.timetable.get(date_str)
+        if day:
+            lessons = []
+            for lno in sorted(day.keys(), key=lambda x: int(x) if x.isdigit() else 99):
+                tt = day[lno]
+                if not tt.get("subject"):
+                    continue
+                lessons.append({
+                    "nr": lno,
+                    "subject": tt["subject"],
+                    "hour_from": tt.get("hour_from", ""),
+                    "hour_to": tt.get("hour_to", ""),
+                    "teacher": tt.get("teacher", ""),
+                    "classroom": tt.get("classroom", ""),
+                    "is_canceled": tt.get("is_canceled", False),
+                })
+            return lessons
+        # Fallback to base timetable
+        return self._get_weekday_lessons(weekday)
 
     @property
     def native_value(self) -> str | None:
         """Return today's lesson count."""
         if self.coordinator.data is None:
             return None
-        today = datetime.now().strftime("%Y-%m-%d")
-        lessons = self._get_day_lessons(today)
-        active = [l for l in lessons if not l["is_canceled"]]
+        today = datetime.now()
+        lessons = self._get_day_lessons_with_overrides(
+            today.strftime("%Y-%m-%d"), today.weekday()
+        )
+        active = [l for l in lessons if not l.get("is_canceled")]
         if not active:
             return "Brak zajec"
         return f"{len(active)} lekcji"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return timetable for today and tomorrow."""
+        """Return full weekly timetable + today/tomorrow details."""
         if self.coordinator.data is None:
             return {}
         today = datetime.now()
         today_str = today.strftime("%Y-%m-%d")
-        tomorrow_str = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow = today + timedelta(days=1)
+        tomorrow_str = tomorrow.strftime("%Y-%m-%d")
 
-        today_lessons = self._get_day_lessons(today_str)
-        tomorrow_lessons = self._get_day_lessons(tomorrow_str)
+        today_lessons = self._get_day_lessons_with_overrides(today_str, today.weekday())
+        tomorrow_lessons = self._get_day_lessons_with_overrides(tomorrow_str, tomorrow.weekday())
 
         attrs: dict[str, Any] = {
             "dzisiaj": today_str,
             "jutro": tomorrow_str,
-            "lekcje_dzisiaj": len([l for l in today_lessons if not l["is_canceled"]]),
-            "lekcje_jutro": len([l for l in tomorrow_lessons if not l["is_canceled"]]),
+            "lekcje_dzisiaj": len([l for l in today_lessons if not l.get("is_canceled")]),
+            "lekcje_jutro": len([l for l in tomorrow_lessons if not l.get("is_canceled")]),
             "items_dzisiaj": today_lessons,
             "items_jutro": tomorrow_lessons,
         }
 
+        # Human-readable today's lessons
         for i, l in enumerate(today_lessons, 1):
-            canceled = " [ODWOLANA]" if l["is_canceled"] else ""
+            canceled = " [ODWOLANA]" if l.get("is_canceled") else ""
+            room = f" s.{l['classroom']}" if l.get("classroom") else ""
             attrs[f"lekcja_{i}"] = (
                 f"{l['hour_from']}-{l['hour_to']} {l['subject']}"
-                f" ({l['teacher']}){canceled}"
+                f" ({l['teacher']}){room}{canceled}"
             )
+
+        # Full weekly base timetable (Mon-Fri)
+        for wd in range(5):
+            day_name = self._DAY_NAMES[wd]
+            day_lessons = self._get_weekday_lessons(wd)
+            attrs[f"items_{day_name}"] = day_lessons
+            summary = []
+            for l in day_lessons:
+                summary.append(f"{l['nr']}. {l['hour_from']}-{l['hour_to']} {l['subject']}")
+            if summary:
+                attrs[day_name] = " | ".join(summary)
 
         return attrs

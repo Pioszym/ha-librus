@@ -283,8 +283,16 @@ class LibrusAPI:
         return await self.api_get("Attendances")
 
     async def get_timetables(self) -> dict[str, Any]:
-        """Get timetables."""
+        """Get timetables (current week only)."""
         return await self.api_get("Timetables")
+
+    async def get_lessons(self) -> dict[str, Any]:
+        """Get lesson definitions (subject+teacher+class mapping)."""
+        return await self.api_get("Lessons")
+
+    async def get_timetable_entries(self) -> dict[str, Any]:
+        """Get permanent timetable entries (base schedule for the whole year)."""
+        return await self.api_get("TimetableEntries")
 
     async def get_teachers(self) -> dict[str, Any]:
         """Get teachers/users."""

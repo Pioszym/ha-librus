@@ -85,8 +85,11 @@ class LibrusData:
         self.free_days: list[dict[str, Any]] = []
         # Substitutions (zastępstwa, odwołane lekcje)
         self.substitutions: list[dict[str, Any]] = []
-        # Timetable (plan lekcji) - used to resolve lesson hours
-        self.timetable: dict[str, list[dict[str, Any]]] = {}  # date -> [lessons]
+        # Timetable (plan lekcji) - weekly from Timetables API (current week)
+        self.timetable: dict[str, dict[str, dict[str, Any]]] = {}  # date -> {lesson_no -> info}
+        # Base timetable from TimetableEntries (permanent, whole year)
+        # weekday (0=Mon) -> lesson_no -> {subject, teacher, classroom, hour_from, hour_to}
+        self.base_timetable: dict[int, dict[str, dict[str, Any]]] = {}
 
 
 class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
@@ -132,6 +135,9 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 self.api.get_school_free_days(),
                 self.api.get_substitutions(),
                 self.api.get_timetables(),
+                self.api.get_lessons(),
+                self.api.get_timetable_entries(),
+                self.api.get_teachers(),
                 return_exceptions=True,
             )
 
@@ -156,6 +162,9 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             free_days_data = results[12] if not isinstance(results[12], Exception) else {}
             substitutions_data = results[13] if not isinstance(results[13], Exception) else {}
             timetable_data = results[14] if not isinstance(results[14], Exception) else {}
+            lessons_data = results[15] if not isinstance(results[15], Exception) else {}
+            tt_entries_data = results[16] if not isinstance(results[16], Exception) else {}
+            teachers_data = results[17] if not isinstance(results[17], Exception) else {}
 
             data = LibrusData()
 
@@ -304,16 +313,24 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             upcoming = [c for c in conferences if c["date"] >= today_str]
             data.next_conference = upcoming[0] if upcoming else None
 
-            # Timetable — build lesson hours lookup
-            # timetable_data has: {Timetable: {date: [slot0, slot1, ...]}}
-            # Each slot is a list of lessons (usually 1 or empty)
+            # Build teacher name map
+            teacher_map: dict[int, str] = {}
+            for t in teachers_data.get("Users", []):
+                tid = t.get("Id")
+                fname = t.get("FirstName", "")
+                lname = t.get("LastName", "")
+                if tid:
+                    teacher_map[tid] = f"{fname} {lname}".strip()
+
+            # Build lesson hours map from Timetables (current week)
+            # LessonNo -> {hour_from, hour_to} — bell schedule is constant
+            bell_schedule: dict[str, dict[str, str]] = {}
             timetable = timetable_data.get("Timetable", {})
-            lesson_hours: dict[str, dict[str, dict[str, str]]] = {}
-            # lesson_hours[date][lesson_no] = {subject, hour_from, hour_to, teacher, classroom}
+            lesson_hours: dict[str, dict[str, dict[str, Any]]] = {}
             for date_str, slots in timetable.items():
                 if not isinstance(slots, list):
                     continue
-                day_lessons: dict[str, dict[str, str]] = {}
+                day_lessons: dict[str, dict[str, Any]] = {}
                 for slot in slots:
                     if isinstance(slot, list):
                         for lesson in slot:
@@ -325,29 +342,69 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                                 t_name = ""
                                 if isinstance(teacher, dict):
                                     t_name = f"{teacher.get('FirstName', '')} {teacher.get('LastName', '')}".strip()
+                                hf = lesson.get("HourFrom", "")
+                                ht = lesson.get("HourTo", "")
                                 day_lessons[lno] = {
                                     "subject": sub_name,
-                                    "hour_from": lesson.get("HourFrom", ""),
-                                    "hour_to": lesson.get("HourTo", ""),
+                                    "hour_from": hf,
+                                    "hour_to": ht,
                                     "teacher": t_name,
                                     "classroom": lesson.get("Classroom", {}).get("Id", "") if isinstance(lesson.get("Classroom"), dict) else "",
                                     "is_canceled": lesson.get("IsCanceled", False),
                                 }
+                                if hf and lno and lno not in bell_schedule:
+                                    bell_schedule[lno] = {"hour_from": hf, "hour_to": ht}
                 if day_lessons:
                     lesson_hours[date_str] = day_lessons
             data.timetable = lesson_hours
 
-            # Build weekday lookup from timetable for dates outside current week
-            # Timetable API only returns ~1 week, so for future homeworks/subs
-            # we fall back to same weekday in available data
-            weekday_lessons: dict[int, dict[str, dict[str, str]]] = {}
-            for date_str, day_data in lesson_hours.items():
-                try:
-                    wd = datetime.strptime(date_str, "%Y-%m-%d").weekday()
-                    if wd not in weekday_lessons and day_data:
-                        weekday_lessons[wd] = day_data
-                except ValueError:
-                    pass
+            # Build base timetable from TimetableEntries (permanent year schedule)
+            # Lessons: Id -> {Subject.Id, Teacher.Id}
+            lesson_def_map: dict[int, dict[str, int]] = {}
+            for ld in lessons_data.get("Lessons", []):
+                lid = ld.get("Id")
+                sub_id = ld.get("Subject", {}).get("Id") if isinstance(ld.get("Subject"), dict) else None
+                tea_id = ld.get("Teacher", {}).get("Id") if isinstance(ld.get("Teacher"), dict) else None
+                if lid:
+                    lesson_def_map[lid] = {"subject_id": sub_id, "teacher_id": tea_id}
+
+            # TimetableEntries: DayOfTheWeek + LessonNo + Lesson.Id + Classroom
+            # DayOfTheWeek: 1=Mon, 2=Tue, ..., 5=Fri (Librus uses 1-based)
+            base_tt: dict[int, dict[str, dict[str, Any]]] = {}
+            for entry in tt_entries_data.get("TimetableEntries", []):
+                date_from = entry.get("DateFrom", "")
+                date_to = entry.get("DateTo", "")
+                if date_to and date_to < today_str:
+                    continue  # Expired entry
+                if date_from and date_from > today_str:
+                    continue  # Not yet active
+                dow = entry.get("DayOfTheWeek")  # 1=Mon in Librus
+                lno = str(entry.get("LessonNo", ""))
+                lesson_id = entry.get("Lesson", {}).get("Id") if isinstance(entry.get("Lesson"), dict) else None
+                classroom = entry.get("Classroom", {})
+                room_name = classroom.get("Symbol", classroom.get("Name", "")) if isinstance(classroom, dict) else ""
+
+                if dow is None or not lno or not lesson_id:
+                    continue
+
+                # Librus DayOfTheWeek: 1=Mon..5=Fri -> Python weekday: 0=Mon..4=Fri
+                py_wd = dow - 1
+                ld = lesson_def_map.get(lesson_id, {})
+                sub_name = subject_map.get(ld.get("subject_id"), "")
+                t_name = teacher_map.get(ld.get("teacher_id"), "")
+
+                hours = bell_schedule.get(lno, {})
+                if py_wd not in base_tt:
+                    base_tt[py_wd] = {}
+                base_tt[py_wd][lno] = {
+                    "subject": sub_name,
+                    "teacher": t_name,
+                    "classroom": room_name,
+                    "hour_from": hours.get("hour_from", ""),
+                    "hour_to": hours.get("hour_to", ""),
+                    "is_canceled": False,
+                }
+            data.base_timetable = base_tt
 
             # HomeWorks (sprawdziany, kartkówki)
             homeworks = []
@@ -360,14 +417,14 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 # Resolve lesson time from timetable
                 hour_from = hw.get("TimeFrom", "")
                 hour_to = hw.get("TimeTo", "")
-                # Cross-reference with timetable: first exact date, then same
-                # weekday fallback (API only returns ~1 week of timetable)
-                # Within a day: prefer lesson_no+subject match, then subject search
+                # Cross-reference: first exact date from Timetables (current week,
+                # includes substitutions/cancellations), then base_timetable
+                # (permanent schedule from TimetableEntries, works for any date)
                 day = lesson_hours.get(hw_date)
                 if not day and hw_date:
                     try:
                         wd = datetime.strptime(hw_date, "%Y-%m-%d").weekday()
-                        day = weekday_lessons.get(wd)
+                        day = base_tt.get(wd)
                     except ValueError:
                         pass
                 if day:
@@ -434,7 +491,7 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 if not day and sub_date:
                     try:
                         wd = datetime.strptime(sub_date, "%Y-%m-%d").weekday()
-                        day = weekday_lessons.get(wd)
+                        day = base_tt.get(wd)
                     except ValueError:
                         pass
                 if day:
