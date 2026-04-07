@@ -112,6 +112,9 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
     async def _async_update_data(self) -> LibrusData:
         """Fetch data from Librus API."""
         try:
+            # Ensure we have a valid token before parallel fetch
+            await self.api._ensure_token()
+
             # Fetch all data in parallel
             results = await asyncio.gather(
                 self.api.get_me(),

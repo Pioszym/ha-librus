@@ -1,0 +1,197 @@
+{
+  "name": "Librus",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 1 }]
+        }
+      },
+      "id": "schedule1",
+      "name": "Co godzine",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://supervisor/core/api/states",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $env.SUPERVISOR_TOKEN }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ha_api",
+      "name": "HA API - Sensory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse HA sensor data into calendar events\nconst allStates = $input.first().json;\n\n// Handle both array response and wrapped response\nconst states = Array.isArray(allStates) ? allStates : (allStates.body || allStates);\nif (!Array.isArray(states)) return [];\n\nconst sensors = {};\nfor (const s of states) {\n  if (s.entity_id && s.entity_id.includes('librus_')) {\n    const parts = s.entity_id.replace('sensor.librus_', '').split('_');\n    // Remove student ID (first part)\n    parts.shift();\n    const key = parts.join('_');\n    sensors[key] = s;\n  }\n}\n\nconst events = [];\nconst today = new Date().toISOString().slice(0, 10);\n\n// 1. HomeWorks (sprawdziany)\nconst hw = sensors['sprawdziany'];\nif (hw && hw.attributes && hw.attributes.items) {\n  for (const item of hw.attributes.items) {\n    if (!item.date || item.date < today) continue;\n    const content = (item.content || '').toLowerCase();\n    let type = 'Sprawdzian';\n    if (content.includes('kartk') || content.includes('kartkówka')) type = 'Kartkówka';\n    const summary = type + ' ' + item.subject;\n    const ev = {\n      summary: summary,\n      description: item.content || '',\n      source: 'homework',\n      sourceId: 'hw_' + item.id,\n      date: item.date,\n      allDay: true\n    };\n    if (item.hour_from && item.hour_from.length >= 5) {\n      const hf = item.hour_from.slice(0, 5);\n      const ht = (item.hour_to || '').slice(0, 5) || hf;\n      ev.startTime = item.date + 'T' + hf + ':00';\n      ev.endTime = item.date + 'T' + ht + ':00';\n      ev.allDay = false;\n    }\n    events.push(ev);\n  }\n}\n\n// 2. SchoolFreeDays\nconst fd = sensors['dni_wolne'];\nif (fd && fd.attributes && fd.attributes.items) {\n  for (const item of fd.attributes.items) {\n    if (!item.date_from) continue;\n    if (item.date_to && item.date_to < today) continue;\n    const name = item.name || 'Dzien wolny';\n    const endDate = new Date(item.date_to || item.date_from);\n    endDate.setDate(endDate.getDate() + 1);\n    const endStr = endDate.toISOString().slice(0, 10);\n    events.push({\n      summary: 'Wolne - ' + name,\n      description: name,\n      source: 'freeday',\n      sourceId: 'fd_' + item.id,\n      date: item.date_from,\n      dateEnd: endStr,\n      allDay: true\n    });\n  }\n}\n\n// 3. Substitutions\nconst sub = sensors['zastepstwa'];\nif (sub && sub.attributes && sub.attributes.items) {\n  for (const item of sub.attributes.items) {\n    if (!item.date || item.date < today) continue;\n    let summary;\n    if (item.is_cancelled) {\n      summary = 'Odwolana ' + item.org_subject;\n    } else if (item.new_subject && item.new_subject !== item.org_subject) {\n      summary = 'Zastepstwo ' + item.org_subject + ' -> ' + item.new_subject;\n    } else {\n      summary = 'Zastepstwo ' + item.org_subject;\n    }\n    const ev = {\n      summary: summary,\n      description: item.note || '',\n      source: 'substitution',\n      sourceId: 'sub_' + item.id,\n      date: item.date,\n      allDay: true\n    };\n    if (item.hour_from && item.hour_from.length >= 5) {\n      const hf = item.hour_from.slice(0, 5);\n      const ht = (item.hour_to || '').slice(0, 5) || hf;\n      ev.startTime = item.date + 'T' + hf + ':00';\n      ev.endTime = item.date + 'T' + ht + ':00';\n      ev.allDay = false;\n    }\n    events.push(ev);\n  }\n}\n\n// 4. Conferences\nconst conf = sensors['zebranie'];\nif (conf && conf.attributes) {\n  const attrs = conf.attributes;\n  for (let i = 1; i <= 20; i++) {\n    const key = 'zebranie_' + i;\n    if (!attrs[key]) break;\n    const parts = attrs[key].split(' - ');\n    const date = parts[0] || '';\n    const topic = parts.slice(1).join(' - ') || '';\n    if (!date || date < today) continue;\n    events.push({\n      summary: 'Wywiadowka',\n      description: topic,\n      source: 'conference',\n      sourceId: 'conf_' + date,\n      date: date,\n      allDay: true\n    });\n  }\n}\n\nreturn events.map(e => ({ json: e }));"
+      },
+      "id": "parse_data",
+      "name": "Parsuj dane Librus",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "kfctnu3pip7iaecohf4hrebvqo@group.calendar.google.com",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ new Date().toISOString() }}",
+          "timeMax": "={{ new Date(Date.now() + 60*24*60*60*1000).toISOString() }}"
+        }
+      },
+      "id": "gcal_get",
+      "name": "Kalendarz Tymon - pobierz",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [220, 220],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "2jbakNzHrU0GvL7G",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compare Librus events with existing calendar events\nconst librusEvents = $('Parsuj dane Librus').all();\nconst calEvents = $('Kalendarz Tymon - pobierz').all();\n\nconst existing = new Set();\nfor (const ce of calEvents) {\n  const e = ce.json;\n  const summary = (e.summary || '').toLowerCase().trim();\n  let date = '';\n  if (e.start) {\n    date = e.start.date || (e.start.dateTime || '').slice(0, 10);\n  }\n  if (date && summary) {\n    existing.add(date + '|' + summary);\n  }\n  // Also match by sourceId tag in description\n  const desc = (e.description || '');\n  const m = desc.match(/\\[librus:(\\w+)\\]/);\n  if (m) existing.add('src:' + m[1]);\n}\n\nconst newEvents = [];\nfor (const le of librusEvents) {\n  const e = le.json;\n  const key = e.date + '|' + e.summary.toLowerCase().trim();\n  const srcKey = 'src:' + e.sourceId;\n  if (!existing.has(key) && !existing.has(srcKey)) {\n    newEvents.push({ json: e });\n  }\n}\n\nreturn newEvents.length > 0 ? newEvents : [];"
+      },
+      "id": "compare",
+      "name": "Porownaj i filtruj nowe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "id": "allday_check",
+              "leftValue": "={{ $json.allDay }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "router",
+      "name": "Calodzienne vs z godzina",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "calendar": {
+          "__rl": true,
+          "value": "kfctnu3pip7iaecohf4hrebvqo@group.calendar.google.com",
+          "mode": "id"
+        },
+        "title": "={{ $json.summary }}",
+        "allday": true,
+        "start": "={{ $json.date }}",
+        "end": "={{ $json.dateEnd || $json.date }}",
+        "additionalFields": {
+          "description": "={{ $json.description + '\\n\\n[librus:' + $json.sourceId + ']' }}"
+        }
+      },
+      "id": "gcal_allday",
+      "name": "Dodaj calodzienne",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [1100, -100],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "2jbakNzHrU0GvL7G",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "calendar": {
+          "__rl": true,
+          "value": "kfctnu3pip7iaecohf4hrebvqo@group.calendar.google.com",
+          "mode": "id"
+        },
+        "title": "={{ $json.summary }}",
+        "start": "={{ $json.startTime }}",
+        "end": "={{ $json.endTime }}",
+        "additionalFields": {
+          "description": "={{ $json.description + '\\n\\n[librus:' + $json.sourceId + ']' }}"
+        }
+      },
+      "id": "gcal_timed",
+      "name": "Dodaj z godzina",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [1100, 100],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "2jbakNzHrU0GvL7G",
+          "name": "Google Calendar account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Co godzine": {
+      "main": [
+        [
+          { "node": "HA API - Sensory", "type": "main", "index": 0 },
+          { "node": "Kalendarz Tymon - pobierz", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "HA API - Sensory": {
+      "main": [
+        [{ "node": "Parsuj dane Librus", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parsuj dane Librus": {
+      "main": [
+        [{ "node": "Porownaj i filtruj nowe", "type": "main", "index": 0 }]
+      ]
+    },
+    "Kalendarz Tymon - pobierz": {
+      "main": [
+        [{ "node": "Porownaj i filtruj nowe", "type": "main", "index": 0 }]
+      ]
+    },
+    "Porownaj i filtruj nowe": {
+      "main": [
+        [{ "node": "Calodzienne vs z godzina", "type": "main", "index": 0 }]
+      ]
+    },
+    "Calodzienne vs z godzina": {
+      "main": [
+        [{ "node": "Dodaj calodzienne", "type": "main", "index": 0 }],
+        [{ "node": "Dodaj z godzina", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

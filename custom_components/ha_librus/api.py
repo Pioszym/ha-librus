@@ -40,6 +40,7 @@ class LibrusAPI:
         self._session: aiohttp.ClientSession | None = None
         self._token: str | None = None
         self._token_time: float = 0
+        self._auth_lock = asyncio.Lock()
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure aiohttp session exists."""
@@ -61,6 +62,8 @@ class LibrusAPI:
     async def authenticate(self) -> str:
         """Perform full OAuth Authorization Code flow with retry.
 
+        Uses a dedicated session for auth to avoid disrupting
+        any in-flight API requests on the main session.
         Returns the oauth_token.
         Raises LibrusAuthError on failure.
         """
@@ -74,8 +77,6 @@ class LibrusAPI:
                 _LOGGER.warning(
                     "Librus auth attempt %d/3 failed: %s", attempt + 1, err
                 )
-                # Close session and create fresh one for retry
-                await self.close()
                 if attempt < 2:
                     await asyncio.sleep(2 * (attempt + 1))
 
@@ -84,16 +85,15 @@ class LibrusAPI:
         )
 
     async def _do_authenticate(self) -> str:
-        """Single authentication attempt."""
-        session = await self._ensure_session()
-
-        # Clear old cookies
-        session.cookie_jar.clear()
+        """Single authentication attempt using a dedicated session."""
+        # Use a fresh dedicated session for auth — never touch self._session
+        jar = aiohttp.CookieJar(unsafe=True)
+        auth_session = aiohttp.ClientSession(cookie_jar=jar)
 
         try:
             # Step 1: Initialize session - GET login portal (follow redirects)
             _LOGGER.debug("Librus auth step 1: init session")
-            async with session.get(
+            async with auth_session.get(
                 LIBRUS_LOGIN_URL,
                 allow_redirects=True,
                 timeout=aiohttp.ClientTimeout(total=30),
@@ -110,7 +110,7 @@ class LibrusAPI:
             }
             headers = {"X-Requested-With": "XMLHttpRequest"}
 
-            async with session.post(
+            async with auth_session.post(
                 login_url,
                 data=login_data,
                 headers=headers,
@@ -129,7 +129,7 @@ class LibrusAPI:
             # Step 3: Follow 2FA redirect to get oauth_token cookie
             _LOGGER.debug("Librus auth step 3: 2FA redirect")
             twofa_url = f"{LIBRUS_OAUTH_2FA_URL}?client_id={LIBRUS_CLIENT_ID}"
-            async with session.get(
+            async with auth_session.get(
                 twofa_url,
                 allow_redirects=True,
                 timeout=aiohttp.ClientTimeout(total=30),
@@ -138,7 +138,7 @@ class LibrusAPI:
 
             # Extract oauth_token from cookies
             token = None
-            for cookie in session.cookie_jar:
+            for cookie in auth_session.cookie_jar:
                 if cookie.key == "oauth_token":
                     token = cookie.value
                     break
@@ -153,11 +153,18 @@ class LibrusAPI:
 
         except aiohttp.ClientError as err:
             raise LibrusAuthError(f"Connection error during auth: {err}") from err
+        finally:
+            await auth_session.close()
 
     async def _ensure_token(self) -> str:
-        """Ensure we have a valid token, re-authenticate if needed."""
-        if not self._token_valid:
-            await self.authenticate()
+        """Ensure we have a valid token, re-authenticate if needed.
+
+        Uses a lock to prevent multiple concurrent re-authentications
+        when parallel API calls all detect an expired token.
+        """
+        async with self._auth_lock:
+            if not self._token_valid:
+                await self.authenticate()
         assert self._token is not None
         return self._token
 
@@ -184,10 +191,15 @@ class LibrusAPI:
             ) as resp:
                 if resp.status == 401:
                     # Token expired, re-authenticate and retry once
-                    _LOGGER.debug("Token expired, re-authenticating")
-                    self._token = None
-                    token = await self._ensure_token()
+                    # Use lock so only one call triggers re-auth
+                    _LOGGER.debug("Token expired for %s, re-authenticating", endpoint)
+                    async with self._auth_lock:
+                        if not self._token_valid or self._token == token:
+                            self._token = None
+                            await self.authenticate()
+                    token = self._token
                     cookies = {"oauth_token": token}
+                    session = await self._ensure_session()
                     async with session.get(
                         url,
                         cookies=cookies,
