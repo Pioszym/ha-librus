@@ -372,16 +372,19 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                         pass
                 if day:
                     matched = None
+                    matched_lno = lesson_no
                     if lesson_no in day and day[lesson_no]["subject"] == hw_sub_name:
                         matched = day[lesson_no]
                     else:
                         for _lno, tt in day.items():
                             if tt["subject"] == hw_sub_name and not tt.get("is_canceled"):
                                 matched = tt
+                                matched_lno = _lno
                                 break
                     if matched and matched["hour_from"]:
                         hour_from = matched["hour_from"]
                         hour_to = matched["hour_to"]
+                        lesson_no = matched_lno
 
                 homeworks.append({
                     "id": hw.get("Id"),
