@@ -348,12 +348,22 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 # Resolve lesson time from timetable
                 hour_from = hw.get("TimeFrom", "")
                 hour_to = hw.get("TimeTo", "")
-                # Try to cross-reference with timetable for the correct hour
-                if hw_date in lesson_hours and lesson_no in lesson_hours[hw_date]:
-                    tt_lesson = lesson_hours[hw_date][lesson_no]
-                    if tt_lesson["hour_from"]:
-                        hour_from = tt_lesson["hour_from"]
-                        hour_to = tt_lesson["hour_to"]
+                # Cross-reference with timetable: first by lesson_no + subject match,
+                # then fallback to subject name search (teachers sometimes pick wrong
+                # lesson_no when creating homework entry)
+                if hw_date in lesson_hours:
+                    day = lesson_hours[hw_date]
+                    matched = None
+                    if lesson_no in day and day[lesson_no]["subject"] == hw_sub_name:
+                        matched = day[lesson_no]
+                    else:
+                        for _lno, tt in day.items():
+                            if tt["subject"] == hw_sub_name and not tt.get("is_canceled"):
+                                matched = tt
+                                break
+                    if matched and matched["hour_from"]:
+                        hour_from = matched["hour_from"]
+                        hour_to = matched["hour_to"]
 
                 homeworks.append({
                     "id": hw.get("Id"),
@@ -396,13 +406,22 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 new_sub_id = sub.get("Subject", {}).get("Id") if isinstance(sub.get("Subject"), dict) else None
                 new_sub_name = subject_map.get(new_sub_id, "") if new_sub_id else ""
 
-                # Resolve time from timetable
+                # Resolve time from timetable (match by subject, not just lesson_no)
                 hour_from = ""
                 hour_to = ""
-                if sub_date in lesson_hours and lesson_no in lesson_hours[sub_date]:
-                    tt = lesson_hours[sub_date][lesson_no]
-                    hour_from = tt["hour_from"]
-                    hour_to = tt["hour_to"]
+                if sub_date in lesson_hours:
+                    day = lesson_hours[sub_date]
+                    matched = None
+                    if lesson_no in day and day[lesson_no]["subject"] == org_sub_name:
+                        matched = day[lesson_no]
+                    else:
+                        for _lno, tt in day.items():
+                            if tt["subject"] == org_sub_name and not tt.get("is_canceled"):
+                                matched = tt
+                                break
+                    if matched:
+                        hour_from = matched["hour_from"]
+                        hour_to = matched["hour_to"]
 
                 substitutions.append({
                     "id": sub.get("Id"),

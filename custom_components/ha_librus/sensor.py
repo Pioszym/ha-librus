@@ -12,6 +12,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from datetime import datetime, timedelta
+
 from .coordinator import LibrusCoordinator, LibrusData, _sanitize_entity_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,6 +62,7 @@ async def async_setup_entry(
         LibrusHomeworksSensor(coordinator, entry),
         LibrusFreeDaysSensor(coordinator, entry),
         LibrusSubstitutionsSensor(coordinator, entry),
+        LibrusTimetableSensor(coordinator, entry),
     ]
     async_add_entities(entities)
 
@@ -532,4 +535,81 @@ class LibrusSubstitutionsSensor(LibrusBaseSensor):
             if sub.get("note"):
                 label += f" ({sub['note']})"
             attrs[f"zmiana_{i}"] = f"{sub['date']}{time_str} - {label}"
+        return attrs
+
+
+class LibrusTimetableSensor(LibrusBaseSensor):
+    """Sensor showing timetable (plan lekcji) for today and tomorrow."""
+
+    def __init__(self, coordinator: LibrusCoordinator, entry: ConfigEntry) -> None:
+        """Initialize."""
+        sid = coordinator.data.student_id if coordinator.data else ""
+        super().__init__(
+            coordinator,
+            entry,
+            "timetable",
+            f"Librus {sid} - Plan lekcji",
+            "mdi:calendar-clock",
+        )
+
+    def _get_day_lessons(self, date_str: str) -> list[dict[str, Any]]:
+        """Get sorted lessons for a given date."""
+        if self.coordinator.data is None:
+            return []
+        day = self.coordinator.data.timetable.get(date_str, {})
+        lessons = []
+        for lno in sorted(day.keys(), key=lambda x: int(x) if x.isdigit() else 99):
+            tt = day[lno]
+            if not tt["subject"]:
+                continue
+            lessons.append({
+                "nr": lno,
+                "subject": tt["subject"],
+                "hour_from": tt["hour_from"],
+                "hour_to": tt["hour_to"],
+                "teacher": tt["teacher"],
+                "is_canceled": tt.get("is_canceled", False),
+            })
+        return lessons
+
+    @property
+    def native_value(self) -> str | None:
+        """Return today's lesson count."""
+        if self.coordinator.data is None:
+            return None
+        today = datetime.now().strftime("%Y-%m-%d")
+        lessons = self._get_day_lessons(today)
+        active = [l for l in lessons if not l["is_canceled"]]
+        if not active:
+            return "Brak zajec"
+        return f"{len(active)} lekcji"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return timetable for today and tomorrow."""
+        if self.coordinator.data is None:
+            return {}
+        today = datetime.now()
+        today_str = today.strftime("%Y-%m-%d")
+        tomorrow_str = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        today_lessons = self._get_day_lessons(today_str)
+        tomorrow_lessons = self._get_day_lessons(tomorrow_str)
+
+        attrs: dict[str, Any] = {
+            "dzisiaj": today_str,
+            "jutro": tomorrow_str,
+            "lekcje_dzisiaj": len([l for l in today_lessons if not l["is_canceled"]]),
+            "lekcje_jutro": len([l for l in tomorrow_lessons if not l["is_canceled"]]),
+            "items_dzisiaj": today_lessons,
+            "items_jutro": tomorrow_lessons,
+        }
+
+        for i, l in enumerate(today_lessons, 1):
+            canceled = " [ODWOLANA]" if l["is_canceled"] else ""
+            attrs[f"lekcja_{i}"] = (
+                f"{l['hour_from']}-{l['hour_to']} {l['subject']}"
+                f" ({l['teacher']}){canceled}"
+            )
+
         return attrs
