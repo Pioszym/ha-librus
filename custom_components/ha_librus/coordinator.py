@@ -337,6 +337,18 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                     lesson_hours[date_str] = day_lessons
             data.timetable = lesson_hours
 
+            # Build weekday lookup from timetable for dates outside current week
+            # Timetable API only returns ~1 week, so for future homeworks/subs
+            # we fall back to same weekday in available data
+            weekday_lessons: dict[int, dict[str, dict[str, str]]] = {}
+            for date_str, day_data in lesson_hours.items():
+                try:
+                    wd = datetime.strptime(date_str, "%Y-%m-%d").weekday()
+                    if wd not in weekday_lessons and day_data:
+                        weekday_lessons[wd] = day_data
+                except ValueError:
+                    pass
+
             # HomeWorks (sprawdziany, kartkówki)
             homeworks = []
             for hw in homeworks_data.get("HomeWorks", []):
@@ -348,11 +360,17 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 # Resolve lesson time from timetable
                 hour_from = hw.get("TimeFrom", "")
                 hour_to = hw.get("TimeTo", "")
-                # Cross-reference with timetable: first by lesson_no + subject match,
-                # then fallback to subject name search (teachers sometimes pick wrong
-                # lesson_no when creating homework entry)
-                if hw_date in lesson_hours:
-                    day = lesson_hours[hw_date]
+                # Cross-reference with timetable: first exact date, then same
+                # weekday fallback (API only returns ~1 week of timetable)
+                # Within a day: prefer lesson_no+subject match, then subject search
+                day = lesson_hours.get(hw_date)
+                if not day and hw_date:
+                    try:
+                        wd = datetime.strptime(hw_date, "%Y-%m-%d").weekday()
+                        day = weekday_lessons.get(wd)
+                    except ValueError:
+                        pass
+                if day:
                     matched = None
                     if lesson_no in day and day[lesson_no]["subject"] == hw_sub_name:
                         matched = day[lesson_no]
@@ -406,11 +424,17 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 new_sub_id = sub.get("Subject", {}).get("Id") if isinstance(sub.get("Subject"), dict) else None
                 new_sub_name = subject_map.get(new_sub_id, "") if new_sub_id else ""
 
-                # Resolve time from timetable (match by subject, not just lesson_no)
+                # Resolve time from timetable (match by subject, weekday fallback)
                 hour_from = ""
                 hour_to = ""
-                if sub_date in lesson_hours:
-                    day = lesson_hours[sub_date]
+                day = lesson_hours.get(sub_date)
+                if not day and sub_date:
+                    try:
+                        wd = datetime.strptime(sub_date, "%Y-%m-%d").weekday()
+                        day = weekday_lessons.get(wd)
+                    except ValueError:
+                        pass
+                if day:
                     matched = None
                     if lesson_no in day and day[lesson_no]["subject"] == org_sub_name:
                         matched = day[lesson_no]
