@@ -270,6 +270,10 @@ class LibrusAPI:
         """Get homework assignments (sprawdziany, kartkówki)."""
         return await self.api_get("HomeWorks")
 
+    async def get_homework_categories(self) -> dict[str, Any]:
+        """Get homework categories (Sprawdzian, Kartkówka, Wycieczka, etc.)."""
+        return await self.api_get("HomeWorks/Categories")
+
     async def get_school_free_days(self) -> dict[str, Any]:
         """Get school free days."""
         return await self.api_get("SchoolFreeDays")

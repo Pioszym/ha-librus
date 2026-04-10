@@ -132,6 +132,7 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 self.api.get_behaviour_types(),
                 self.api.get_parent_teacher_conferences(),
                 self.api.get_homeworks(),
+                self.api.get_homework_categories(),
                 self.api.get_school_free_days(),
                 self.api.get_substitutions(),
                 self.api.get_timetables(),
@@ -159,12 +160,13 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
             behaviour_types = results[9] if not isinstance(results[9], Exception) else {}
             conferences_data = results[10] if not isinstance(results[10], Exception) else {}
             homeworks_data = results[11] if not isinstance(results[11], Exception) else {}
-            free_days_data = results[12] if not isinstance(results[12], Exception) else {}
-            substitutions_data = results[13] if not isinstance(results[13], Exception) else {}
-            timetable_data = results[14] if not isinstance(results[14], Exception) else {}
-            lessons_data = results[15] if not isinstance(results[15], Exception) else {}
-            tt_entries_data = results[16] if not isinstance(results[16], Exception) else {}
-            teachers_data = results[17] if not isinstance(results[17], Exception) else {}
+            hw_categories_data = results[12] if not isinstance(results[12], Exception) else {}
+            free_days_data = results[13] if not isinstance(results[13], Exception) else {}
+            substitutions_data = results[14] if not isinstance(results[14], Exception) else {}
+            timetable_data = results[15] if not isinstance(results[15], Exception) else {}
+            lessons_data = results[16] if not isinstance(results[16], Exception) else {}
+            tt_entries_data = results[17] if not isinstance(results[17], Exception) else {}
+            teachers_data = results[18] if not isinstance(results[18], Exception) else {}
 
             data = LibrusData()
 
@@ -406,6 +408,11 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 }
             data.base_timetable = base_tt
 
+            # HomeWorks categories (Sprawdzian, Kartkówka, etc.)
+            hw_cat_map: dict[int, str] = {}
+            for cat in hw_categories_data.get("Categories", []):
+                hw_cat_map[cat.get("Id")] = cat.get("Name", "")
+
             # HomeWorks (sprawdziany, kartkówki)
             homeworks = []
             for hw in homeworks_data.get("HomeWorks", []):
@@ -413,6 +420,8 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                 lesson_no = str(hw.get("LessonNo", ""))
                 hw_sub_id = hw.get("Subject", {}).get("Id") if isinstance(hw.get("Subject"), dict) else None
                 hw_sub_name = subject_map.get(hw_sub_id, "Nieznany") if hw_sub_id else ""
+                hw_cat_id = hw.get("Category", {}).get("Id") if isinstance(hw.get("Category"), dict) else None
+                hw_category = hw_cat_map.get(hw_cat_id, "Sprawdzian") if hw_cat_id else "Sprawdzian"
 
                 # Resolve lesson time from timetable
                 hour_from = hw.get("TimeFrom", "")
@@ -447,6 +456,7 @@ class LibrusCoordinator(DataUpdateCoordinator[LibrusData]):
                     "id": hw.get("Id"),
                     "date": hw_date,
                     "subject": hw_sub_name,
+                    "category": hw_category,
                     "content": hw.get("Content", ""),
                     "lesson_no": lesson_no,
                     "hour_from": hour_from,

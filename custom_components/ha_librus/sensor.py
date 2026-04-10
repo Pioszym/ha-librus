@@ -442,8 +442,9 @@ class LibrusHomeworksSensor(LibrusBaseSensor):
             time_str = hw.get("hour_from", "")
             if time_str:
                 time_str = f" {time_str}"
+            cat = hw.get("category", "Sprawdzian")
             attrs[f"sprawdzian_{i}"] = (
-                f"{hw['date']}{time_str} - {hw['subject']}: {hw['content'][:100]}"
+                f"{hw['date']}{time_str} - [{cat}] {hw['subject']}: {hw['content'][:100]}"
             )
         return attrs
 
