@@ -2,6 +2,8 @@
 
 Custom Home Assistant integration for [Librus Synergia](https://synergia.librus.pl/) - Polish school management system.
 
+Built with [Claude](https://claude.ai) (Anthropic).
+
 ## Features
 
 - **Automatic authentication** via Librus OAuth (parent portal login)
@@ -81,4 +83,4 @@ automation:
 
 ## Credits
 
-Built for Home Assistant using Librus Synergia API.
+Built with [Claude](https://claude.ai) (Anthropic).
