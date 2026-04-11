@@ -1,5 +1,7 @@
 # Librus Synergia - Home Assistant Integration
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Pioszym&repository=ha-librus&category=integration)
+
 Custom Home Assistant integration for [Librus Synergia](https://synergia.librus.pl/) - Polish school management system.
 
 Built with [Claude](https://claude.ai) (Anthropic).
